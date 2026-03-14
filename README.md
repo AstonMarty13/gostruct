@@ -1,3 +1,5 @@
+![Go Version](https://img.shields.io/badge/go-1.26-blue.svg)
+
 # 🚀 GoStruct
 
 **GoStruct** est un outil CLI ultra-léger écrit en **Go** qui permet de générer instantanément une arborescence de projet standardisée. Fini les tâches répétitives, lancez vos nouveaux projets Go en une seule commande !

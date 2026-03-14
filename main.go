@@ -38,7 +38,7 @@ func main() {
 `
 
 var defaultFiles = map[string]string{
-	".gitignore": "bin/\n*.exe\n*.out\nvendor/\n",
+	".gitignore": "bin/\n*.exe\n*.out\nvendor/\n.vscode/\n",
 }
 
 func loadUserConfig() (UserConfig, error) {

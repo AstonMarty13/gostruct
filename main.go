@@ -1,12 +1,16 @@
+// Command gostruct scaffolds a standard Go project layout in one command.
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -18,6 +22,7 @@ type ScaffoldOptions struct {
 	DryRun bool              // print plan without writing anything
 	Dirs   []string          // directories to create inside Root
 	Files  map[string]string // files to write; key = relative path, value = content
+	Out    io.Writer         // where the dry-run plan is written; nil means os.Stdout
 }
 
 // UserConfig mirrors the shape of ~/.gostruct.json.
@@ -73,12 +78,17 @@ func scaffold(opts ScaffoldOptions) error {
 		module = filepath.Base(opts.Root)
 	}
 
-	// 3. Build the files map (defaults + cmd/main.go + user overrides).
+	// 3. Build the files map (defaults + cmd/<app>/main.go + user overrides).
+	//
+	// The entrypoint goes in cmd/<app>/, not cmd/, because "go build ./..."
+	// names each binary after its parent directory: cmd/main.go would try to
+	// write a binary called "cmd" over the cmd/ directory itself and fail.
+	app := filepath.Base(module)
 	files := make(map[string]string, len(defaultFiles)+len(opts.Files)+1)
 	for k, v := range defaultFiles {
 		files[k] = v
 	}
-	files[filepath.Join("cmd", "main.go")] = fmt.Sprintf(cmdMainGoTemplate, module)
+	files[filepath.Join("cmd", app, "main.go")] = fmt.Sprintf(cmdMainGoTemplate, app)
 	for k, v := range opts.Files {
 		files[k] = v
 	}
@@ -94,21 +104,57 @@ func scaffold(opts ScaffoldOptions) error {
 		}
 	}
 
+	// Git cannot track an empty directory, so a scaffolded internal/ or pkg/
+	// would disappear on the first commit. Drop a .gitkeep in any directory
+	// that would otherwise be empty.
+	for d := range dirSet {
+		hasContent := false
+		for path := range files {
+			// Anywhere beneath d counts, not just direct children: cmd/ is not
+			// empty once cmd/<app>/main.go exists.
+			if strings.HasPrefix(path, d+string(filepath.Separator)) {
+				hasContent = true
+				break
+			}
+		}
+		if !hasContent {
+			files[filepath.Join(d, ".gitkeep")] = ""
+		}
+	}
+
 	// 5. Dry-run: print plan and return without writing.
 	if opts.DryRun {
-		fmt.Printf("[dry-run] project root : %s\n", opts.Root)
-		fmt.Printf("[dry-run] module       : %s\n", module)
-		fmt.Println("[dry-run] directories  :")
+		out := opts.Out
+		if out == nil {
+			out = os.Stdout
+		}
+		// Sort both listings so the plan is stable between runs; ranging over
+		// a map would print them in a different order every time.
+		dirs := make([]string, 0, len(dirSet))
 		for d := range dirSet {
-			fmt.Printf("  %s/\n", filepath.Join(opts.Root, d))
+			dirs = append(dirs, d)
 		}
-		fmt.Println("[dry-run] files        :")
+		sort.Strings(dirs)
+
+		paths := make([]string, 0, len(files))
 		for f := range files {
-			fmt.Printf("  %s\n", filepath.Join(opts.Root, f))
+			paths = append(paths, f)
 		}
-		fmt.Printf("[dry-run] would run    : go mod init %s\n", module)
+		sort.Strings(paths)
+
+		fmt.Fprintf(out, "[dry-run] project root : %s\n", opts.Root)
+		fmt.Fprintf(out, "[dry-run] module       : %s\n", module)
+		fmt.Fprintln(out, "[dry-run] directories  :")
+		for _, d := range dirs {
+			fmt.Fprintf(out, "  %s/\n", filepath.Join(opts.Root, d))
+		}
+		fmt.Fprintln(out, "[dry-run] files        :")
+		for _, f := range paths {
+			fmt.Fprintf(out, "  %s\n", filepath.Join(opts.Root, f))
+		}
+		fmt.Fprintf(out, "[dry-run] would run    : go mod init %s\n", module)
 		if opts.Git {
-			fmt.Println("[dry-run] would run    : git init")
+			fmt.Fprintln(out, "[dry-run] would run    : git init")
 		}
 		return nil
 	}
@@ -119,8 +165,11 @@ func scaffold(opts ScaffoldOptions) error {
 		return fmt.Errorf("creating root directory %q: %w", opts.Root, err)
 	}
 	defer func() {
-		if failed {
-			os.RemoveAll(opts.Root)
+		if !failed {
+			return
+		}
+		if rmErr := os.RemoveAll(opts.Root); rmErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: rollback could not remove %q: %v\n", opts.Root, rmErr)
 		}
 	}()
 
@@ -169,20 +218,25 @@ func runCmd(dir, name string, args ...string) error {
 	return nil
 }
 
-func main() {
-	module := flag.String("module", "", "Go module path (default: project dir name)")
-	git := flag.Bool("git", false, "Run git init after scaffolding")
-	dryRun := flag.Bool("dry-run", false, "Preview actions without writing any files")
+// run is the real entry point. main is a thin wrapper so that the CLI surface
+// — flag parsing, argument validation, exit behaviour — stays testable.
+func run(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("gostruct", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 
-	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, `gostruct - scaffold a standard Go project layout
+	module := fs.String("module", "", "Go module path (default: project dir name)")
+	git := fs.Bool("git", false, "Run git init after scaffolding")
+	dryRun := fs.Bool("dry-run", false, "Preview actions without writing any files")
+
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, `gostruct - scaffold a standard Go project layout
 
 Usage:
   gostruct [flags] <project-dir>
 
 Flags:`)
-		flag.PrintDefaults()
-		fmt.Fprintln(os.Stderr, `
+		fs.PrintDefaults()
+		fmt.Fprintln(stderr, `
 Examples:
   gostruct myapp
   gostruct --module github.com/alice/myapp myapp
@@ -196,36 +250,50 @@ Config file (~/.gostruct.json):
   }`)
 	}
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
-	args := flag.Args()
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "error: project name is required")
-		flag.Usage()
-		os.Exit(1)
+	rest := fs.Args()
+	if len(rest) < 1 {
+		fs.Usage()
+		return errors.New("project name is required")
 	}
 
 	cfg, err := loadUserConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
+	// Copy defaultDirs rather than appending to it: append would reuse the
+	// package-level backing array as soon as it has spare capacity.
+	dirs := make([]string, 0, len(defaultDirs)+len(cfg.Dirs))
+	dirs = append(dirs, defaultDirs...)
+	dirs = append(dirs, cfg.Dirs...)
+
 	opts := ScaffoldOptions{
-		Root:   args[0],
+		Root:   rest[0],
 		Module: *module,
 		Git:    *git,
 		DryRun: *dryRun,
-		Dirs:   append(defaultDirs, cfg.Dirs...),
+		Dirs:   dirs,
 		Files:  cfg.Files,
+		Out:    stdout,
 	}
 
 	if err := scaffold(opts); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if !*dryRun {
-		fmt.Printf("Project %q created successfully.\n", args[0])
+		fmt.Fprintf(stdout, "Project %q created successfully.\n", rest[0])
+	}
+	return nil
+}
+
+func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 }

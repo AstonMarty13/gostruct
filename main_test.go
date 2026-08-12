@@ -154,6 +154,75 @@ func TestScaffold_UserConfigFiles(t *testing.T) {
 	}
 }
 
+func TestScaffold_RejectsConfigPathsOutsideRoot(t *testing.T) {
+	// A "files" key from ~/.gostruct.json is joined onto Root, so anything that
+	// climbs out of it would be written wherever it points.
+	hostile := []string{
+		"../escape.txt",
+		"a/../../escape.txt",
+		"./sneaky.txt",
+		filepath.Join(string(filepath.Separator), "etc", "passwd"),
+	}
+
+	for _, path := range hostile {
+		t.Run(path, func(t *testing.T) {
+			root := tempRoot(t, "guarded")
+
+			err := scaffold(ScaffoldOptions{
+				Root:  root,
+				Dirs:  defaultDirs,
+				Files: map[string]string{path: "pwned"},
+			})
+			if err == nil {
+				t.Fatalf("expected %q to be rejected", path)
+			}
+			if !strings.Contains(err.Error(), "plain relative path") {
+				t.Errorf("unexpected error for %q: %v", path, err)
+			}
+			if _, statErr := os.Stat(root); statErr == nil {
+				t.Errorf("%q was rejected but the root was created anyway", path)
+			}
+
+			// The escape target must not exist either.
+			outside := filepath.Join(filepath.Dir(root), "escape.txt")
+			if _, statErr := os.Stat(outside); statErr == nil {
+				t.Errorf("%q wrote outside the project root", path)
+			}
+		})
+	}
+}
+
+func TestScaffold_RejectsConfigDirsOutsideRoot(t *testing.T) {
+	root := tempRoot(t, "guardeddirs")
+
+	err := scaffold(ScaffoldOptions{
+		Root: root,
+		Dirs: append(append([]string{}, defaultDirs...), "../oops"),
+	})
+	if err == nil {
+		t.Fatal("expected ../oops to be rejected")
+	}
+	if !strings.Contains(err.Error(), "plain relative path") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestIsSafeRelative(t *testing.T) {
+	safe := []string{"cmd", "cmd/app/main.go", "a/b/c", ".gitignore"}
+	for _, p := range safe {
+		if !isSafeRelative(p) {
+			t.Errorf("isSafeRelative(%q) = false, want true", p)
+		}
+	}
+
+	unsafe := []string{"", ".", "..", "./x", "../x", "a/../b", "a//b", "/abs"}
+	for _, p := range unsafe {
+		if isSafeRelative(p) {
+			t.Errorf("isSafeRelative(%q) = true, want false", p)
+		}
+	}
+}
+
 func TestScaffold_DryRunPlanIsStable(t *testing.T) {
 	root := tempRoot(t, "planapp")
 

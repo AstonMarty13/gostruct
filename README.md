@@ -95,6 +95,10 @@ scaffold:
 Your entries are merged on top of the defaults; files you define win over the
 built-in ones.
 
+Paths must be plain relative paths that stay inside the project: absolute paths
+and anything containing `..` are rejected before the project directory is
+created, so a stray `"../../.zshrc"` cannot write outside the target.
+
 ## Design notes
 
 **The entrypoint goes in `cmd/<app>/main.go`, not `cmd/main.go`.** `go build
@@ -109,6 +113,11 @@ Directories that already contain something are left alone.
 **Failures roll back.** If `go mod init` or `git init` fails, the partially
 created project directory is removed rather than left half-written. An existing
 target directory is never touched.
+
+**Config paths are validated, not trusted.** Keys from `~/.gostruct.json` are
+joined onto the project root, so a path climbing out of it would be written
+wherever it points. Every directory and file path is checked before anything is
+created; a rejected config leaves the filesystem untouched.
 
 ## Development
 

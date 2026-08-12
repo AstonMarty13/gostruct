@@ -104,6 +104,19 @@ func scaffold(opts ScaffoldOptions) error {
 		}
 	}
 
+	// Nothing from ~/.gostruct.json may escape the project root. Both maps are
+	// checked before anything is created, so a rejected config leaves no trace.
+	for d := range dirSet {
+		if !isSafeRelative(d) {
+			return fmt.Errorf("directory %q is not a plain relative path inside the project", d)
+		}
+	}
+	for path := range files {
+		if !isSafeRelative(path) {
+			return fmt.Errorf("file %q is not a plain relative path inside the project", path)
+		}
+	}
+
 	// Git cannot track an empty directory, so a scaffolded internal/ or pkg/
 	// would disappear on the first commit. Drop a .gitkeep in any directory
 	// that would otherwise be empty.
@@ -206,6 +219,25 @@ func scaffold(opts ScaffoldOptions) error {
 	}
 
 	return nil
+}
+
+// isSafeRelative reports whether p is a plain relative path that stays inside
+// the project root.
+//
+// Absolute paths, volume names, and "", "." or ".." elements are all rejected.
+// Without this, a "files" key of "../../.zshrc" in ~/.gostruct.json is joined
+// onto Root and written wherever it points.
+func isSafeRelative(p string) bool {
+	if p == "" || filepath.IsAbs(p) || filepath.VolumeName(p) != "" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(p), "/") {
+		switch part {
+		case "", ".", "..":
+			return false
+		}
+	}
+	return true
 }
 
 func runCmd(dir, name string, args ...string) error {

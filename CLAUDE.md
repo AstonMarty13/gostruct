@@ -40,7 +40,8 @@ No external dependencies — stdlib only.
 3. Build the file map: defaults, then `cmd/<app>/main.go`, then user overrides
    from `~/.gostruct.json`
 4. Derive the directory set from `Dirs` plus the parents of every file path,
-   and add a `.gitkeep` to any directory that would otherwise be empty
+   reject any path that is not a plain relative path inside the root, and add a
+   `.gitkeep` to any directory that would otherwise be empty
 5. On `--dry-run`, print a sorted plan to `opts.Out` and return without writing
 6. Otherwise create directories and files, then run `go mod init` and
    optionally `git init`
@@ -51,6 +52,10 @@ No external dependencies — stdlib only.
   and the generated project fails to build.
 - Any failure after the root directory is created rolls it back via the
   `failed` flag and the deferred `os.RemoveAll`.
+- `isSafeRelative` runs over both maps *before* `os.MkdirAll(opts.Root)`, so a
+  rejected config never creates anything. Keep it there: moving the check after
+  the root is created would rely on rollback to undo a path that, by definition,
+  points outside the tree rollback removes.
 - The dry-run plan is sorted; ranging over the maps directly would make the
   output non-deterministic.
 - `run()` copies `defaultDirs` before appending config dirs — appending

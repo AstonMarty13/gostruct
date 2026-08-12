@@ -3,3 +3,6 @@ bin/
 *.out
 vendor/
 .vscode/
+gostruct
+coverage.out
+.DS_Store

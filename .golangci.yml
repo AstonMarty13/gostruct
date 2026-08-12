@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+
+  settings:
+    errcheck:
+      # Writes to stdout/stderr are reported but not actionable: if the stream
+      # is gone the message could not be delivered anyway, and the process has
+      # nothing useful to do about it. Real I/O — creating directories, writing
+      # project files — is still checked everywhere.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
+formatters:
+  enable:
+    - gofmt

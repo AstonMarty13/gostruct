@@ -1,6 +1,6 @@
 # gostruct
 
-[![CI](https://github.com/AstonMarty13/gostruct/actions/workflows/ci.yml/badge.svg)](https://github.com/AstonMarty13/gostruct/actions/workflows/ci.yml)
+[![CI](https://github.com/AstonMarty13/gostruct/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/AstonMarty13/gostruct/actions/workflows/ci.yml)
 
 Scaffold a standard Go project layout in one command. No external dependencies —
 Go standard library only.
